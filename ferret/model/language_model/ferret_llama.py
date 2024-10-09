@@ -130,7 +130,7 @@ class FERRETLlamaForCausalLM(LlamaForCausalLM, FERRETMetaForCausalLM):
                 "past_key_values": past_key_values,
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
-                "images": kwargs.get("images", None),
+                "images": kwargs.get("images", None),  #将图像信息从kwargs中取出放入字典
             }
         )
         return model_inputs
