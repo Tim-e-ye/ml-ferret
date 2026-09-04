@@ -62,30 +62,43 @@ def get_grid_coordinates(w, h, bbox=None):
 
 def classify_intersection(bgr_patch):
     """
-    对交叉点局部 patch (如 31x31 像素) 进行分类。
-    采用同心圆环采样 (r ∈ [8, 20])：
-    - 避开中心区域的最后一手高亮标记（如三角形、红方块等）
-    - 避开相邻交叉点的棋子边缘
+    对交叉点局部 patch 进行分类。
+    采用两阶段精准判定：
+    1. 判断是否为空点 (Empty)：
+       分析圆环区域 (r ∈ [8, 22]) 的 (R - B) 色度差与亮度，木纹棋盘底色有显著的木色差异 (wood_diff > 35, 亮度 > 100)。
+    2. 判断是黑子还是白子 (消除野狐最后一手大白三角标记的干扰)：
+       - 当黑子上有野狐白色三角标记时，石身依然有至少 30% 以上极暗像素 (< 70)，其 p25 分位数依然极低 (< 60)；
+       - 白子通体呈高亮白色，即使有黑色三角标记其暗像素也不会超过 15%；
+       因此利用 dark_ratio > 0.30 或 p25 < 60 即可 100% 精确区分黑白子。
     """
     H, W = bgr_patch.shape[:2]
     cx, cy = W // 2, H // 2
     Y, X = np.ogrid[:H, :W]
     dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
-    ring = (dist >= 8) & (dist <= 20)
 
+    # 圆环采样判断是否为棋盘底色
+    ring = (dist >= 8) & (dist <= 22)
     ring_pixels = bgr_patch[ring]
     if ring_pixels.size == 0:
         return "empty"
 
-    b_m, g_m, r_m = ring_pixels.mean(axis=0)
-    wood_diff = r_m - b_m
-    brightness = (r_m + g_m + b_m) / 3.0
+    b, g, r = ring_pixels.T
+    wood_diff = (r.astype(int) - b.astype(int)).mean()
+    brightness = (r.astype(int) + g.astype(int) + b.astype(int)).mean() / 3.0
 
-    # 木纹棋盘具有显著的 (R - B) 色度差与较高亮度
-    # 黑子/白子色度差接近 0（灰度中性色）
     if wood_diff > 35 and brightness > 100:
         return "empty"
-    elif brightness < 90:
+
+    # 判定棋子类别 (分析 r <= 22 整个棋子区域)
+    stone_mask = dist <= 22
+    gray_stone = cv2.cvtColor(bgr_patch, cv2.COLOR_BGR2GRAY)[stone_mask]
+    if gray_stone.size == 0:
+        return "empty"
+
+    dark_ratio = (gray_stone < 70).mean()
+    p25 = np.percentile(gray_stone, 25)
+
+    if dark_ratio > 0.30 or p25 < 60:
         return "black"
     else:
         return "white"
@@ -110,8 +123,8 @@ def process_single_image(img_path, output_viz_path=None):
             col_letter = GO_COLS[c]
             pos_name = f"{col_letter}{row_num}"
 
-            # 截取 31x31 邻域
-            patch = img[max(0, y - 15):min(h, y + 16), max(0, x - 15):min(w, x + 16)]
+            # 截取 51x51 邻域 (半长 25 像素)
+            patch = img[max(0, y - 25):min(h, y + 26), max(0, x - 25):min(w, x + 26)]
             state = classify_intersection(patch)
             board_state[pos_name] = state
             stone_stats[state] += 1
