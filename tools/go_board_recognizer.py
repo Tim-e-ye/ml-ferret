@@ -65,18 +65,20 @@ def classify_intersection(bgr_patch):
     对交叉点局部 patch 进行分类。
     采用两阶段精准判定：
     1. 判断是否为空点 (Empty)：
-       分析圆环区域 (r ∈ [8, 22]) 的 (R - B) 色度差与亮度，木纹棋盘底色有显著的木色差异 (wood_diff > 35, 亮度 > 100)。
-    2. 判断是黑子还是白子 (消除野狐最后一手大白三角标记的干扰)：
-       - 当黑子上有野狐白色三角标记时，石身依然有至少 30% 以上极暗像素 (< 70)，其 p25 分位数依然极低 (< 60)；
-       - 白子通体呈高亮白色，即使有黑色三角标记其暗像素也不会超过 15%；
-       因此利用 dark_ratio > 0.30 或 p25 < 60 即可 100% 精确区分黑白子。
+       分析圆环区域 (r ∈ [8, 22]) 的 (R - B) 色度差与亮度，木纹棋盘底色有显著的黄色饱和度 (wood_diff > 35, 亮度 > 100)。
+    2. 判断是黑子还是白子 (完美适配最后一手象限标记)：
+       - 最后一手黑子：一、二、四象限为黑色，仅第三象限是白色三角标记，暗黑像素占绝对多数；
+       - 最后一手白子：一、二、四象限为白色，仅第三象限是黑色三角标记，高亮白像素占绝对多数；
+       在棋子区域 (r <= 20) 内直接比较暗黑像素数 (< 75) 与高亮白像素数 (> 160)：
+       - 暗黑像素 > 高亮白像素 => 判定为黑子 (black)
+       - 高亮白像素 >= 暗黑像素 => 判定为白子 (white)
     """
     H, W = bgr_patch.shape[:2]
     cx, cy = W // 2, H // 2
     Y, X = np.ogrid[:H, :W]
     dist = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
 
-    # 圆环采样判断是否为棋盘底色
+    # 圆环采样判断是否为棋盘木纹底色
     ring = (dist >= 8) & (dist <= 22)
     ring_pixels = bgr_patch[ring]
     if ring_pixels.size == 0:
@@ -89,16 +91,16 @@ def classify_intersection(bgr_patch):
     if wood_diff > 35 and brightness > 100:
         return "empty"
 
-    # 判定棋子类别 (分析 r <= 22 整个棋子区域)
-    stone_mask = dist <= 22
+    # 判定棋子类别 (分析 r <= 20 棋子核心区域)
+    stone_mask = dist <= 20
     gray_stone = cv2.cvtColor(bgr_patch, cv2.COLOR_BGR2GRAY)[stone_mask]
     if gray_stone.size == 0:
         return "empty"
 
-    dark_ratio = (gray_stone < 70).mean()
-    p25 = np.percentile(gray_stone, 25)
+    num_black = (gray_stone < 75).sum()
+    num_white = (gray_stone > 160).sum()
 
-    if dark_ratio > 0.30 or p25 < 60:
+    if num_black > num_white:
         return "black"
     else:
         return "white"
