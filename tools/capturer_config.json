@@ -1,0 +1,13 @@
+{
+  "save_dir": "D:/Code/VibeCode/Antigravity/Project/Ferret/Datasets/Dataset1",
+  "game_prefix": "fox_board-2",
+  "current_move": 6,
+  "step_size": 1,
+  "hotkey": "F8",
+  "bbox": [
+    262,
+    63,
+    1631,
+    1430
+  ]
+}

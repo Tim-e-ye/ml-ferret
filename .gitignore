@@ -34,3 +34,5 @@ dist/
 # Customized
 checkpoints/
 paper/
+Datasets/
+data/
