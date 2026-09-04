@@ -29,31 +29,33 @@ try:
 except Exception:
     pass
 
-# 围棋标准列名（19 列，国际标准跳过字母 I）
-GO_COLS = "ABCDEFGHJKLMNOPQRST"
+# 围棋野狐列名（19 列，A 到 S，与野狐围棋棋盘最下方印刷字母完全一致）
+GO_COLS = "ABCDEFGHIJKLMNOPQRS"
 BOARD_SIZE = 19
 STATE_MAP = {"black": "黑", "white": "白", "empty": "空"}
 
-# 野狐围棋经过精密标定的网格边界 (针对当前 1369x1367 标准截图)
-DEFAULT_GRID_BBOX = [44, 42, 1306, 1302]  # [x_min, y_min, x_max, y_max]
+# 野狐对局模式标准网格边界 (针对当前 1369x1367 标准截图)
+GAME_GRID_BBOX = [44, 42, 1306, 1302]
+# 野狐空棋盘模式网格边界 (针对 fox_board-1 / fox_board-2 空盘截图)
+EMPTY_BOARD_GRID_BBOX = [35, 32, 1314, 1311]
 
 
-def get_grid_coordinates(w, h, bbox=None):
+def get_grid_coordinates(w, h, bbox=None, img_name=None):
     """
-    根据图片尺寸与棋盘边界计算 19x19 个交叉点的绝对像素坐标。
-    若未指定 bbox，且尺寸与标准野狐截图一致，使用预置精准坐标；
-    若尺寸不同，按比例缩放。
+    根据图片尺寸与棋盘类型计算 19x19 个交叉点的绝对像素坐标。
+    - 对局截图 (fox_game*): 网格范围 [44, 42, 1306, 1302]
+    - 空棋盘截图 (fox_board*): 网格范围 [35, 32, 1314, 1311]
     """
     if bbox is not None:
         x_min, y_min, x_max, y_max = bbox
     else:
-        # 基于标准 (1369, 1367) 比例自适应
+        base_bbox = EMPTY_BOARD_GRID_BBOX if (img_name and "board" in img_name.lower()) else GAME_GRID_BBOX
         scale_x = w / 1369.0
         scale_y = h / 1367.0
-        x_min = int(round(DEFAULT_GRID_BBOX[0] * scale_x))
-        y_min = int(round(DEFAULT_GRID_BBOX[1] * scale_y))
-        x_max = int(round(DEFAULT_GRID_BBOX[2] * scale_x))
-        y_max = int(round(DEFAULT_GRID_BBOX[3] * scale_y))
+        x_min = int(round(base_bbox[0] * scale_x))
+        y_min = int(round(base_bbox[1] * scale_y))
+        x_max = int(round(base_bbox[2] * scale_x))
+        y_max = int(round(base_bbox[3] * scale_y))
 
     xs = [x_min + int(round(i * (x_max - x_min) / float(BOARD_SIZE - 1))) for i in range(BOARD_SIZE)]
     ys = [y_min + int(round(j * (y_max - y_min) / float(BOARD_SIZE - 1))) for j in range(BOARD_SIZE)]
@@ -113,7 +115,7 @@ def process_single_image(img_path, output_viz_path=None):
         return None
 
     h, w = img.shape[:2]
-    xs, ys, bbox = get_grid_coordinates(w, h)
+    xs, ys, bbox = get_grid_coordinates(w, h, img_name=os.path.basename(img_path))
 
     board_state = {}
     stone_stats = {"black": 0, "white": 0, "empty": 0}
