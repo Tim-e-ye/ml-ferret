@@ -76,12 +76,20 @@ python tools/autodl_pro_manager.py status
 
 ### 阶段 1：基座构建（初次仅需做一次）
 1. 在 AutoDL 控制台手动开一台 Pro 实例，将**系统盘扩容至 60GB**，挂载同区 AutoDL-FS。
-2. 连入实例，配置好 Python 3.10 / PyTorch / CUDA 环境：
+2. **开启学术网络加速**（由于访问 GitHub / HuggingFace 网络原因，**每个新终端窗口必须先执行**）：
+   ```bash
+   source /etc/network_turbo
+   ```
+   > 📌 **重要提醒**：`source /etc/network_turbo` 仅对当前终端窗口有效。每次重新连接 SSH 或新建终端窗口时，若需拉取 GitHub/HuggingFace 资源，必须重新执行一次。
+
+3. 连入实例，配置好 Python 3.10 / PyTorch / CUDA 环境：
    ```bash
    conda activate base # 或自定义 conda env
-   pip install -r requirements.txt
+   pip install --upgrade pip
+   pip install -e .
+   pip install pycocotools protobuf==3.20.0 ninja opencv-python
    ```
-3. 在实例内配置拉取 GitHub 私有库的 SSH Key（可选）：
+4. 在实例内配置拉取 GitHub 私有库的 SSH Key（可选）：
    ```bash
    ssh-keygen -t ed25519 -C "autodl-ferret"
    cat ~/.ssh/id_ed25519.pub # 将公钥添加到 GitHub -> Settings -> SSH Keys

@@ -46,11 +46,15 @@ else
     echo "如果直接使用本地已存在数据或未打包数据集，请确保软链接或拷贝至 /dev/shm 避免小文件网络 I/O 瓶颈。"
 fi
 
-# 3. GitHub 代码一致性检查
+# 3. GitHub 代码一致性检查 (开启学术加速以防拉取超时)
 echo "🔄 检查 GitHub 代码更新..."
 if [ -d ".git" ]; then
-    echo "--> 正在拉取远程最新代码: git pull origin main..."
-    git pull origin main || echo "git pull 跳过或遇到未提交改动，继续训练流程"
+    if [ -f "/etc/network_turbo" ]; then
+        echo "--> 激活 AutoDL 学术网络加速..."
+        source /etc/network_turbo
+    fi
+    echo "--> 正在拉取远程最新代码: git pull origin go-board-tuning..."
+    git pull origin go-board-tuning || echo "git pull 跳过或遇到未提交改动，继续训练流程"
 fi
 
 # 4. 执行训练命令示例 (实际命令根据微调参数配置)
