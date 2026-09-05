@@ -35,4 +35,10 @@ dist/
 checkpoints/
 paper/
 Datasets/
-data/
+data/
+
+# AutoDL Local Configs
+autodl_config.json
+.autodl_config.json
+*.autodl.json
+

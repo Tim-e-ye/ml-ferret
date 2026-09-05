@@ -1,0 +1,9 @@
+{
+  "api_token": "YOUR_AUTODL_API_TOKEN_HERE",
+  "instance_uuid": "",
+  "instance_name_filter": "pro",
+  "ssh_host_alias": "autodl-pro",
+  "identity_file": "~/.ssh/id_rsa",
+  "region": "beijing-a",
+  "fs_mount_path": "/root/autodl-fs"
+}
