@@ -56,6 +56,7 @@ class FERRETLlamaForCausalLM(LlamaForCausalLM, FERRETMetaForCausalLM):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         region_masks: Optional[List[torch.Tensor]] = None,
+        board_bboxes: Optional[List[Any]] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -71,7 +72,9 @@ class FERRETLlamaForCausalLM(LlamaForCausalLM, FERRETMetaForCausalLM):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images, region_masks=region_masks)
+        input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(
+            input_ids, attention_mask, past_key_values, labels, images, region_masks=region_masks, board_bboxes=board_bboxes
+        )
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -131,6 +134,7 @@ class FERRETLlamaForCausalLM(LlamaForCausalLM, FERRETMetaForCausalLM):
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
                 "images": kwargs.get("images", None),  #将图像信息从kwargs中取出放入字典
+                "board_bboxes": kwargs.get("board_bboxes", None),
             }
         )
         return model_inputs

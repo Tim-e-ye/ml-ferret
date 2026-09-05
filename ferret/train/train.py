@@ -74,6 +74,8 @@ class ModelArguments:
     sampler_pooler_mode: str = field(default='mean')    # Support 'mean' or 'max'
     no_coor: bool = False
     save_vision_tower: bool = field(default=False)
+    add_go_grid_sampler: bool = False
+    go_board_size: int = 19
 
 
 @dataclass
@@ -748,6 +750,14 @@ class LazySupervisedDataset(Dataset):
             data_i['dataset'] = 'cc3m_595k'
             data_i['image'] = os.path.join(image_folder, data_i['image'])
         return datas
+
+    def load_go_board(self, data_path, image_folder):
+        datas = json.load(open(data_path, "r", encoding="utf-8"))
+        for data_i in datas:
+            data_i['dataset'] = 'go_board'
+            if image_folder and not os.path.isabs(data_i['image']):
+                data_i['image'] = os.path.join(image_folder, data_i['image'])
+        return datas
     
     def __init__(self, data_path: str,
                  tokenizer: transformers.PreTrainedTokenizer,
@@ -808,8 +818,16 @@ class LazySupervisedDataset(Dataset):
             elif 'cc3m_595k' in data_path_i:
                 logging.warning(f"Loading cc3m_595k data")
                 list_data_dict.append(self.load_cc3m(data_path_i, image_folder_i))
+            elif 'go' in data_path_i.lower() or 'board' in data_path_i.lower():
+                logging.warning(f"Loading go_board data from {data_path_i}")
+                list_data_dict.append(self.load_go_board(data_path_i, image_folder_i))
             else:
-                raise ValueError(f'{data_path_i} Not Supported.')
+                # 默认尝试作为 go_board 或通用 JSON 加载
+                try:
+                    logging.warning(f"Attempting to load {data_path_i} as go_board data")
+                    list_data_dict.append(self.load_go_board(data_path_i, image_folder_i))
+                except Exception:
+                    raise ValueError(f'{data_path_i} Not Supported.')
         
         if data_multiple is None:
             # Concat all data directly and Shuffle.
@@ -1102,6 +1120,14 @@ class LazySupervisedDataset(Dataset):
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         if self.add_region_feature:
             data_dict['region_masks'] = cache_region_masks
+        if 'board_bbox' in sources[0] or sources[0].get('dataset') == 'go_board':
+            bbox = sources[0].get('board_bbox', [0, 0, sources[0].get('image_w', 1), sources[0].get('image_h', 1)])
+            img_w = float(sources[0].get('image_w', 1))
+            img_h = float(sources[0].get('image_h', 1))
+            data_dict['board_bbox'] = [
+                bbox[0] / img_w, bbox[1] / img_h,
+                bbox[2] / img_w, bbox[3] / img_h
+            ]
         return data_dict
 
 
@@ -1139,6 +1165,10 @@ class DataCollatorForSupervisedDataset(object):
         if 'region_masks' in instances[0]:
             region_masks = [instance['region_masks'] for instance in instances]
             batch['region_masks'] = region_masks
+
+        if 'board_bbox' in instances[0]:
+            board_bboxes = [instance.get('board_bbox', None) for instance in instances]
+            batch['board_bboxes'] = board_bboxes
 
         return batch
 
@@ -1265,7 +1295,9 @@ def train():
             fsdp=training_args.fsdp,
             add_region_feature=model_args.add_region_feature,
             region_geo_sampler=model_args.region_geo_sampler,
-            sampler_pooler_mode=model_args.sampler_pooler_mode
+            sampler_pooler_mode=model_args.sampler_pooler_mode,
+            add_go_grid_sampler=model_args.add_go_grid_sampler,
+            go_board_size=model_args.go_board_size,
         )
         
         vision_tower = model.get_vision_tower()
@@ -1304,13 +1336,22 @@ def train():
                 for p in model.get_model().region_fea_adapter.parameters():
                     p.requires_grad = True
 
+        if model_args.add_go_grid_sampler:
+            if hasattr(model.get_model(), 'go_grid_sampler'):
+                for p in model.get_model().go_grid_sampler.parameters():
+                    p.requires_grad = True
+
         if training_args.bits in [4, 8]:
             model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
 
         model.config.mm_use_im_start_end = data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
-        model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer, add_region_feature=model_args.add_region_feature)
+        model.initialize_vision_tokenizer(
+            model_args, tokenizer=tokenizer,
+            add_region_feature=model_args.add_region_feature,
+            add_go_grid_sampler=model_args.add_go_grid_sampler,
+        )
 
     if training_args.bits in [4, 8]:
         from peft.tuners.lora import LoraLayer

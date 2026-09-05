@@ -330,6 +330,60 @@ class GeoRegionSampler(nn.Module):
 
 
 
+class GoGridSampler(nn.Module):
+    """从视觉特征图中直接采样 19x19 围棋棋盘交叉点特征并投影到 LLM hidden_size"""
+
+    def __init__(self, input_dim, output_dim, board_size=19):
+        super().__init__()
+        self.board_size = board_size
+        self.num_positions = board_size * board_size  # 361
+        self.projector = nn.Linear(input_dim, output_dim)
+
+    def forward(self, feature_map, board_bboxes=None, original_dtype=torch.float32, return_dtype=torch.float32):
+        """
+        Args:
+            feature_map: (B, H*W, C) 视觉特征图 (例如 B, 576, 1024)
+            board_bboxes: list of [x1, y1, x2, y2] 棋盘归一化边界框 (0~1 范围)。如果为 None，默认占满整个图像
+            original_dtype: 原始类型
+            return_dtype: 返回类型
+        Returns:
+            list of (361, hidden_size) tensors，每个 batch 一个
+        """
+        B = feature_map.shape[0]
+        h = w = int(math.sqrt(feature_map.shape[1]))
+        C = feature_map.shape[-1]
+
+        all_position_features = []
+        for b in range(B):
+            if board_bboxes is not None and b < len(board_bboxes) and board_bboxes[b] is not None:
+                x1, y1, x2, y2 = board_bboxes[b]
+            else:
+                x1, y1, x2, y2 = 0.0, 0.0, 1.0, 1.0
+
+            # 19x19 归一化网格坐标 [0, 1]
+            cols = torch.linspace(x1, x2, self.board_size, device=feature_map.device, dtype=torch.float32)
+            rows = torch.linspace(y1, y2, self.board_size, device=feature_map.device, dtype=torch.float32)
+            grid_y, grid_x = torch.meshgrid(rows, cols, indexing='ij')
+            grid_points = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)  # (361, 2)
+
+            # (H*W, C) -> (1, C, H, W)
+            feat = feature_map[b].reshape(h, w, C).permute(2, 0, 1).unsqueeze(0)
+
+            # grid_sample 要求坐标在 [-1, 1]
+            sample_points = (2.0 * grid_points - 1.0).unsqueeze(0).unsqueeze(1)  # (1, 1, 361, 2)
+
+            # (1, C, 1, 361)
+            sampled = F.grid_sample(feat.float(), sample_points.float(), align_corners=True, mode='bilinear')
+            sampled = sampled.to(return_dtype)
+            sampled = sampled.squeeze(0).squeeze(1).transpose(0, 1)  # (361, C)
+
+            pos_features = self.projector(sampled)  # (361, output_dim)
+            all_position_features.append(pos_features)
+
+        return all_position_features
+
+
+
 class FERRETMetaModel:
 
     def __init__(self, config):
@@ -353,13 +407,20 @@ class FERRETMetaModel:
                                                        pooler_mode=config.sampler_pooler_mode
                                                        )
 
+        if getattr(config, "go_grid_sampler", False):
+            self.go_grid_sampler = GoGridSampler(
+                input_dim=config.mm_hidden_size,
+                output_dim=config.hidden_size,
+                board_size=getattr(config, 'go_board_size', 19)
+            )
+
     def get_vision_tower(self):
         vision_tower = getattr(self, 'vision_tower', None)
         if type(vision_tower) is list:
             vision_tower = vision_tower[0]
         return vision_tower
 
-    def initialize_vision_modules(self, model_args, fsdp=None, add_region_feature=False, region_geo_sampler=False, sampler_pooler_mode='mean'):
+    def initialize_vision_modules(self, model_args, fsdp=None, add_region_feature=False, region_geo_sampler=False, sampler_pooler_mode='mean', add_go_grid_sampler=False, go_board_size=19):
         vision_tower = model_args.vision_tower
         mm_vision_select_layer = model_args.mm_vision_select_layer
         mm_vision_select_feature = model_args.mm_vision_select_feature
@@ -399,6 +460,17 @@ class FERRETMetaModel:
                 self.config.region_fea_adapter = True
                 if not hasattr(self, 'region_fea_adapter'):
                     self.region_fea_adapter = nn.Linear(self.config.mm_hidden_size, self.config.hidden_size)
+
+        if add_go_grid_sampler or getattr(model_args, 'add_go_grid_sampler', False):
+            self.config.go_grid_sampler = True
+            board_size = getattr(model_args, 'go_board_size', go_board_size)
+            self.config.go_board_size = board_size
+            if not hasattr(self, 'go_grid_sampler'):
+                self.go_grid_sampler = GoGridSampler(
+                    input_dim=self.config.mm_hidden_size,
+                    output_dim=self.config.hidden_size,
+                    board_size=board_size
+                )
 
         if pretrain_mm_mlp_adapter is not None:
             mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
@@ -469,7 +541,7 @@ class FERRETMetaForCausalLM(ABC):
     
 
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, attention_mask, past_key_values, labels, images, region_masks
+        self, input_ids, attention_mask, past_key_values, labels, images, region_masks=None, board_bboxes=None
     ):
         if region_masks is not None:
             region_flag = True
@@ -505,6 +577,16 @@ class FERRETMetaForCausalLM(ABC):
                                                               original_dtype=raw_image_features.dtype,
                                                               return_dtype=image_features.dtype)
             assert len(region_features) == len(input_ids)
+
+        go_grid_sampler = getattr(self.config, 'go_grid_sampler', False)
+        if go_grid_sampler and hasattr(self.get_model(), 'go_grid_sampler'):
+            go_position_features = self.get_model().go_grid_sampler(
+                raw_image_features, board_bboxes,
+                original_dtype=raw_image_features.dtype,
+                return_dtype=image_features.dtype
+            )
+        else:
+            go_position_features = None
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
@@ -577,6 +659,21 @@ class FERRETMetaForCausalLM(ABC):
                     if hasattr(self.config, 'im_region_fea_token'):
                         assert (cur_input_ids == self.config.im_region_fea_token).sum() == 0
 
+                # Replace Go position tokens with sampled grid features
+                if go_grid_sampler and go_position_features is not None and batch_idx < len(go_position_features) and go_position_features[batch_idx] is not None:
+                    go_token_ids = getattr(self.config, 'go_position_token_ids', None)
+                    if go_token_ids is not None:
+                        go_feats = go_position_features[batch_idx]  # shape: (361, hidden_size)
+                        go_embs = torch.zeros_like(text_input_embeds)
+                        go_all_mask = torch.zeros_like(cur_input_ids, dtype=torch.bool)
+                        for pos_idx, token_id in enumerate(go_token_ids):
+                            go_replace_mask = (cur_input_ids == token_id)
+                            if go_replace_mask.any():
+                                go_embs[go_replace_mask] = go_feats[pos_idx].to(text_input_embeds.dtype)
+                                go_all_mask = go_all_mask | go_replace_mask
+                        if go_all_mask.any():
+                            text_input_embeds = text_input_embeds * (~go_all_mask).to(text_input_embeds.dtype)[:, None] + go_embs
+
                 cur_new_input_embeds.append(text_input_embeds)
             cur_new_input_embeds = [x.to(device=self.device) for x in cur_new_input_embeds]
             cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
@@ -623,7 +720,7 @@ class FERRETMetaForCausalLM(ABC):
 
         return None, attention_mask, past_key_values, new_input_embeds, new_labels
 
-    def initialize_vision_tokenizer(self, model_args, tokenizer, add_region_feature=False):
+    def initialize_vision_tokenizer(self, model_args, tokenizer, add_region_feature=False, add_go_grid_sampler=False):
         if model_args.mm_use_im_patch_token:
             tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
             self.resize_token_embeddings(len(tokenizer))
@@ -631,6 +728,14 @@ class FERRETMetaForCausalLM(ABC):
         if add_region_feature:
             num_region_fea_tokens = tokenizer.add_tokens([DEFAULT_REGION_FEA_TOKEN], special_tokens=True)
             self.config.im_region_fea_token = tokenizer.convert_tokens_to_ids([DEFAULT_REGION_FEA_TOKEN])[0]
+            self.resize_token_embeddings(len(tokenizer))
+
+        if add_go_grid_sampler or getattr(model_args, 'add_go_grid_sampler', False):
+            from ferret.constants import GO_POSITION_TOKENS
+            num_go_tokens = tokenizer.add_tokens(GO_POSITION_TOKENS, special_tokens=True)
+            self.config.go_position_token_ids = tokenizer.convert_tokens_to_ids(GO_POSITION_TOKENS)
+            self.config.go_grid_sampler = True
+            self.config.go_board_size = getattr(model_args, 'go_board_size', 19)
             self.resize_token_embeddings(len(tokenizer))
 
         if model_args.mm_use_im_start_end:

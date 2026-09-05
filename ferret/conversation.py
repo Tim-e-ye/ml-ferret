@@ -263,11 +263,25 @@ ferret_conv_vicuna_v1 = Conversation(
     sep2="</s>",
 )
 
+ferret_conv_go_v1 = Conversation(
+    system="A chat between a human and an AI that understands Go board images. "
+           "The AI can identify the state of each intersection on a 19x19 Go board. "
+           "Follow instructions carefully. ",
+    roles=("USER", "ASSISTANT"),
+    version="v1",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.TWO,
+    sep=" ",
+    sep2="</s>",
+)
+
 
 default_conversation = ferret_conv_vicuna_v1
 conv_templates = {
     "v1": ferret_conv_vicuna_v1,
     "ferret_v1": ferret_conv_vicuna_v1,
+    "ferret_go_v1": ferret_conv_go_v1,
 }
 
 
