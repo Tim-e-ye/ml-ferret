@@ -1120,10 +1120,11 @@ class LazySupervisedDataset(Dataset):
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         if self.add_region_feature:
             data_dict['region_masks'] = cache_region_masks
-        if 'board_bbox' in sources[0] or sources[0].get('dataset') == 'go_board':
-            bbox = sources[0].get('board_bbox', [0, 0, sources[0].get('image_w', 1), sources[0].get('image_h', 1)])
-            img_w = float(sources[0].get('image_w', 1))
-            img_h = float(sources[0].get('image_h', 1))
+        raw_item = self.list_data_dict[i]
+        if 'board_bbox' in raw_item or raw_item.get('dataset') == 'go_board':
+            bbox = raw_item.get('board_bbox', [0, 0, raw_item.get('image_w', 1), raw_item.get('image_h', 1)])
+            img_w = float(raw_item.get('image_w', 1))
+            img_h = float(raw_item.get('image_h', 1))
             data_dict['board_bbox'] = [
                 bbox[0] / img_w, bbox[1] / img_h,
                 bbox[2] / img_w, bbox[3] / img_h
