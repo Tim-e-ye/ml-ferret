@@ -313,6 +313,18 @@ def cmd_update_ssh(config):
     if root_pwd:
         print(f"🔑 默认 root 密码 : {root_pwd}")
 
+def cmd_log(config, follow=False, lines=25):
+    """查看远程训练实时日志与 Loss 进度"""
+    alias = config.get("ssh_host_alias", "autodl-pro")
+    log_path = "/root/autodl-fs/models/train.log"
+    import subprocess
+    flag = "-f" if follow else f"-n {lines}"
+    print(f"📡 正在拉取远程训练日志 ({alias}:{log_path})... (按 Ctrl+C 可退出)\n" + "-" * 60)
+    try:
+        subprocess.run(["ssh", alias, f"if [ -f {log_path} ]; then tail {flag} {log_path}; else echo '尚未检测到 train.log 日志文件，请确认训练是否已启动。'; fi"])
+    except KeyboardInterrupt:
+        print("\n[INFO] 已退出日志查看。后台训练继续在远程运行中。")
+
 def main():
     parser = argparse.ArgumentParser(description="AutoDL Pro 无状态实例与本地 IDE 自动化连接管理器")
     subparsers = parser.add_subparsers(dest="command", help="子命令")
@@ -321,6 +333,10 @@ def main():
     subparsers.add_parser("stop", aliases=["down", "off"], help="关机以停止扣费")
     subparsers.add_parser("status", aliases=["list"], help="列出实例和当前连接信息")
     subparsers.add_parser("update-ssh", help="仅更新当前运行实例的本地 SSH Config")
+    
+    log_parser = subparsers.add_parser("log", aliases=["loss"], help="实时查看远程训练日志与 Loss 变化")
+    log_parser.add_argument("-f", "--follow", action="store_true", help="持续流式跟踪最新日志")
+    log_parser.add_argument("-n", "--lines", type=int, default=25, help="显示的行数 (默认: 25)")
 
     args = parser.parse_args()
     if not args.command:
@@ -339,6 +355,8 @@ def main():
             cmd_status(config)
         elif cmd == "update-ssh":
             cmd_update_ssh(config)
+        elif cmd in ["log", "loss"]:
+            cmd_log(config, follow=getattr(args, "follow", False), lines=getattr(args, "lines", 25))
     except Exception as e:
         print(f"\n[ERROR] 操作失败: {e}", file=sys.stderr)
         sys.exit(1)

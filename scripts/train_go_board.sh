@@ -62,6 +62,7 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=25001 \
     --pretrain_mm_mlp_adapter "$PRETRAIN_PROJECTOR" \
     --add_go_grid_sampler True \
     --go_board_size 19 \
+    --tune_mm_mlp_adapter True \
     --bf16 True \
     --output_dir "$OUTPUT_DIR" \
     --num_train_epochs $NUM_EPOCHS \
@@ -71,15 +72,24 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=25001 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 200 \
-    --save_total_limit 2 \
+    --save_total_limit 3 \
     --learning_rate $LEARNING_RATE \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
-    --logging_steps 10 \
+    --logging_steps 1 \
     --tf32 True \
     --model_max_length 2048 \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to "tensorboard"
+
+echo "================================================================"
+echo "🎉 恭喜！Ferret 围棋微调训练全部完成！Checkpoint 已安全落地 AutoDL-FS。"
+echo "正在执行磁盘同步并在 5 秒后安全关机..."
+echo "================================================================"
+sync
+sleep 5
+/usr/bin/shutdown
+
