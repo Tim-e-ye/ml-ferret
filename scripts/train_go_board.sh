@@ -3,25 +3,41 @@
 # Ferret 围棋棋盘特化训练启动脚本 (AutoDL 环境)
 # ====================================================================
 
-# 1. 基础路径配置 (根据 AutoDL 实际存放路径调整)
-MODEL_NAME_OR_PATH="ferret-7b-v1-3"        # 基础预训练权重目录或 HuggingFace ID
-DATA_PATH="./Datasets/go_all.json"         # 围棋训练数据 JSON 路径
-IMAGE_FOLDER="./Datasets/captures"         # 原始围棋截图图片目录
-OUTPUT_DIR="./checkpoints/ferret-go-7b"    # 训练输出与权重保存目录
+# 1. 基础路径配置 (匹配 AutoDL-FS 持久化路径与 /dev/shm 内存加速盘)
+FS_ROOT="/root/autodl-fs"
+MODEL_NAME_OR_PATH="${FS_ROOT}/models/vicuna-7b-v1.3"
+PRETRAIN_PROJECTOR="${FS_ROOT}/models/llava-336px-pretrain-vicuna-7b-v1.3/mm_projector.bin"
+VISION_TOWER="${FS_ROOT}/models/clip-vit-large-patch14-336"
+DATASET_TAR="${FS_ROOT}/datasets/go_dataset.tar"
 
-# 2. 深度学习训练参数
-BATCH_SIZE=4
-GRAD_ACCUMULATION=4
+SHM_DATA_DIR="/dev/shm/go_dataset"
+DATA_PATH="${SHM_DATA_DIR}/Datasets/go_train.json"
+IMAGE_FOLDER="${SHM_DATA_DIR}"
+OUTPUT_DIR="${FS_ROOT}/models/ferret_go_checkpoints"
+
+# 2. 深度学习训练参数 (针对 RTX 4090 24G 显存优化)
+BATCH_SIZE=2
+GRAD_ACCUMULATION=8
 LEARNING_RATE=2e-5
 NUM_EPOCHS=3
 
 echo "================================================================"
-echo "开始 Ferret 围棋棋盘特化训练"
-echo "基础模型: $MODEL_NAME_OR_PATH"
+echo "🚀 开始 Ferret 围棋棋盘特化训练"
+echo "语言底座: $MODEL_NAME_OR_PATH"
+echo "视觉投影器: $PRETRAIN_PROJECTOR"
+echo "视觉编码器: $VISION_TOWER"
 echo "训练数据: $DATA_PATH"
-echo "截图目录: $IMAGE_FOLDER"
-echo "保存路径: $OUTPUT_DIR"
+echo "图片目录: $IMAGE_FOLDER"
+echo "输出目录: $OUTPUT_DIR"
 echo "================================================================"
+
+# 准备 /dev/shm 极速内存盘
+if [ -f "$DATASET_TAR" ] && [ ! -d "$SHM_DATA_DIR" ]; then
+    echo "📦 正在将数据集解压至 /dev/shm 极速内存盘..."
+    mkdir -p "$SHM_DATA_DIR"
+    tar -xf "$DATASET_TAR" -C "$SHM_DATA_DIR"
+    echo "✅ /dev/shm 解压完成！"
+fi
 
 # 3. 运行前快速环境与架构验证
 python scripts/test_go_model.py
@@ -42,7 +58,8 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=25001 \
     --version "ferret_go_v1" \
     --data_path "$DATA_PATH" \
     --image_folder "$IMAGE_FOLDER" \
-    --vision_tower "openai/clip-vit-large-patch14-336" \
+    --vision_tower "$VISION_TOWER" \
+    --pretrain_mm_mlp_adapter "$PRETRAIN_PROJECTOR" \
     --add_go_grid_sampler True \
     --go_board_size 19 \
     --bf16 True \

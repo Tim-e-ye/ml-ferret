@@ -41,4 +41,10 @@ data/
 autodl_config.json
 .autodl_config.json
 *.autodl.json
+
+# Archive files
+*.tar
+*.tar.gz
+*.zip
+
 

@@ -11,7 +11,7 @@
 #    limitations under the License.
 
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 
 import torch
 import torch.nn as nn
@@ -133,7 +133,7 @@ class FERRETLlamaForCausalLM(LlamaForCausalLM, FERRETMetaForCausalLM):
                 "past_key_values": past_key_values,
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
-                "images": kwargs.get("images", None),  #将图像信息从kwargs中取出放入字典
+                "images": kwargs.get("images", None),  #将图像信息从kwargs中取出放入字�?
                 "board_bboxes": kwargs.get("board_bboxes", None),
             }
         )
