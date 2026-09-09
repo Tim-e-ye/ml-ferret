@@ -11,20 +11,24 @@
 #    limitations under the License.
 
 
-from typing import List, Optional, Tuple, Union, Any
-
-import torch
-import torch.nn as nn
-from torch.nn import CrossEntropyLoss
-
-from transformers import AutoConfig, AutoModelForCausalLM, \
-                         LlamaConfig, LlamaModel, LlamaForCausalLM
-
-from transformers.modeling_outputs import CausalLMOutputWithPast
-
-from ..ferret_arch import FERRETMetaModel, FERRETMetaForCausalLM
-
-
+from typing import List, Optional, Tuple, Union, Any
+
+import torch
+import torch.nn as nn
+from torch.nn import CrossEntropyLoss
+
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    LlamaConfig,
+    LlamaModel,
+    LlamaForCausalLM,
+)
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
+from ..ferret_arch import FERRETMetaModel, FERRETMetaForCausalLM
+
+
 class FERRETConfig(LlamaConfig):
     model_type = "ferret"
 
