@@ -141,7 +141,13 @@ def evaluate():
         print(f"\n" + "-" * 60)
         print(f"📸 测试样本 #{idx+1}: {os.path.basename(img_path)}")
         image = Image.open(img_path).convert("RGB")
-        img_tensor = image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0].unsqueeze(0).cuda().half()
+        img_tensor = image_processor.preprocess(
+            image,
+            return_tensors="pt",
+            do_resize=True,
+            do_center_crop=False,
+            size={"height": 336, "width": 336}
+        )["pixel_values"][0].unsqueeze(0).cuda().half()
 
         # 归一化棋盘坐标
         board_bbox = sample.get("board_bbox", [0, 0, sample.get("image_w", 1), sample.get("image_h", 1)])

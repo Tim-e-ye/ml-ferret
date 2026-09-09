@@ -37,11 +37,13 @@ class CLIPImageProcessor_GIT(CLIPImageProcessor):
                 The channel dimension format of the image. If not provided, it will be the same as the input image.
         """
         size = get_size_dict(size, default_to_square=True, height_width_order=True)
-        # Hack(haoxuan): Bypass the shortest_edge detection. We hope to get a {"height": size[0], "width": size[1]}, where w=h.
-        # if "shortest_edge" not in size:
-        #     raise ValueError(f"The `size` parameter must contain the key `shortest_edge`. Got {size.keys()}")
-        # output_size = get_resize_output_image_size(image, size=size["shortest_edge"], default_to_square=True)
-        output_size = get_resize_output_image_size(image, size=(size["height"], size["width"]), default_to_square=True)
+        if "height" in size and "width" in size:
+            h, w = size["height"], size["width"]
+        elif "shortest_edge" in size:
+            h = w = size["shortest_edge"]
+        else:
+            h = w = 336
+        output_size = get_resize_output_image_size(image, size=(h, w), default_to_square=True)
         return resize(image, size=output_size, resample=resample, data_format=data_format, **kwargs)
     
 
