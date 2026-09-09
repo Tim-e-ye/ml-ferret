@@ -48,8 +48,19 @@ def evaluate():
 
     base_model_path = "/root/autodl-fs/models/vicuna-7b-v1.3"
     ckpt_path = "/root/autodl-fs/models/ferret_go_checkpoints/checkpoint-200/mm_projector.bin"
-    val_json_path = "/dev/shm/go_dataset/Datasets/go_val.json"
-    image_base_dir = "/dev/shm/go_dataset"
+    dataset_tar = "/root/autodl-fs/datasets/go_dataset.tar"
+    shm_data_dir = "/dev/shm/go_dataset"
+
+    # 自动解压内存盘
+    if os.path.exists(dataset_tar) and not os.path.exists(os.path.join(shm_data_dir, "Datasets")):
+        print(f"📦 正在自动解压 {dataset_tar} 至 /dev/shm 内存加速盘...")
+        os.makedirs(shm_data_dir, exist_ok=True)
+        import subprocess
+        subprocess.run(["tar", "-xf", dataset_tar, "-C", shm_data_dir], check=True)
+        print("✅ 内存盘解压就绪！")
+
+    val_json_path = os.path.join(shm_data_dir, "Datasets/go_val.json")
+    image_base_dir = shm_data_dir
 
     if not os.path.exists(val_json_path):
         val_json_path = "Datasets/go_val.json"
