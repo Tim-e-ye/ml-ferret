@@ -125,7 +125,11 @@ def evaluate():
         model.get_model().go_grid_sampler.load_state_dict(sampler_weights)
         print("   -> go_grid_sampler 围棋网格采样器权重加载成功")
 
-    model = model.cuda().eval()
+    model.get_model().mm_projector.to(device="cuda", dtype=torch.float16)
+    if hasattr(model.get_model(), "go_grid_sampler"):
+        model.get_model().go_grid_sampler.to(device="cuda", dtype=torch.float16)
+
+    model = model.cuda().to(torch.float16).eval()
     image_processor = vision_tower.image_processor
 
     print("\n4. 抽取验证集真实样本进行端到端推理测试...")
