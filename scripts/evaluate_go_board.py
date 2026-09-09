@@ -18,7 +18,7 @@ from ferret.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, GO_POSITION
 from ferret.conversation import conv_templates
 from ferret.model.builder import load_pretrained_model
 from ferret.mm_utils import tokenizer_image_token, get_model_name_from_path
-from ferret.model.language_model.ferret_llama import FerretLlamaForCausalLM
+from ferret.model.language_model.ferret_llama import FERRETLlamaForCausalLM, FERRETConfig
 
 
 def parse_go_state(text):
@@ -64,13 +64,13 @@ def evaluate():
     from transformers import AutoTokenizer, AutoConfig
     tokenizer = AutoTokenizer.from_pretrained(base_model_path, use_fast=False)
     
-    config = AutoConfig.from_pretrained(base_model_path)
+    config = FERRETConfig.from_pretrained(base_model_path)
     config.tune_mm_mlp_adapter = True
     config.add_go_grid_sampler = True
     config.go_board_size = 19
     config.vision_tower = "/root/autodl-fs/models/clip-vit-large-patch14-336"
 
-    model = FerretLlamaForCausalLM.from_pretrained(
+    model = FERRETLlamaForCausalLM.from_pretrained(
         base_model_path,
         config=config,
         torch_dtype=torch.float16
