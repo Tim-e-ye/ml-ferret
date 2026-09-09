@@ -75,6 +75,16 @@ def evaluate():
     from transformers import AutoTokenizer, AutoConfig
     tokenizer = AutoTokenizer.from_pretrained(base_model_path, use_fast=False)
     
+    from ferret.train.train import ModelArguments
+    model_args = ModelArguments(
+        model_name_or_path=base_model_path,
+        version="ferret_go_v1",
+        vision_tower="/root/autodl-fs/models/clip-vit-large-patch14-336",
+        add_go_grid_sampler=True,
+        go_board_size=19,
+        tune_mm_mlp_adapter=True,
+    )
+
     config = FERRETConfig.from_pretrained(base_model_path)
     config.tune_mm_mlp_adapter = True
     config.add_go_grid_sampler = True
@@ -87,12 +97,19 @@ def evaluate():
         torch_dtype=torch.float16
     ).cuda()
 
-    model.initialize_vision_modules(
-        config,
+    model.get_model().initialize_vision_modules(
+        model_args=model_args,
         add_go_grid_sampler=True,
         go_board_size=19
     )
-    model.initialize_vision_tokenizer(config, tokenizer=tokenizer, add_go_grid_sampler=True)
+    model.initialize_vision_tokenizer(
+        model_args=model_args,
+        tokenizer=tokenizer,
+        add_go_grid_sampler=True
+    )
+
+    vision_tower = model.get_vision_tower()
+    vision_tower.to(dtype=torch.float16, device="cuda")
 
     print(f"3. 注入微调好的围棋多模态权重: {ckpt_path}")
     weights = torch.load(ckpt_path, map_location="cpu")
@@ -100,16 +117,16 @@ def evaluate():
     # 加载 mm_projector 与 go_grid_sampler
     proj_weights = {k.replace("model.mm_projector.", ""): v for k, v in weights.items() if "model.mm_projector" in k}
     if proj_weights:
-        model.model.mm_projector.load_state_dict(proj_weights)
+        model.get_model().mm_projector.load_state_dict(proj_weights)
         print("   -> mm_projector 权重加载成功")
 
     sampler_weights = {k.replace("model.go_grid_sampler.projector.", "projector."): v for k, v in weights.items() if "go_grid_sampler" in k}
-    if sampler_weights and hasattr(model.model, "go_grid_sampler"):
-        model.model.go_grid_sampler.load_state_dict(sampler_weights)
+    if sampler_weights and hasattr(model.get_model(), "go_grid_sampler"):
+        model.get_model().go_grid_sampler.load_state_dict(sampler_weights)
         print("   -> go_grid_sampler 围棋网格采样器权重加载成功")
 
     model = model.cuda().eval()
-    image_processor = model.get_vision_tower().image_processor
+    image_processor = vision_tower.image_processor
 
     print("\n4. 抽取验证集真实样本进行端到端推理测试...")
     # 测试前 3 个样本
