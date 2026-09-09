@@ -76,6 +76,7 @@ class ModelArguments:
     save_vision_tower: bool = field(default=False)
     add_go_grid_sampler: bool = False
     go_board_size: int = 19
+    unfreeze_embed_lm_head: bool = False
 
 
 @dataclass
@@ -1353,6 +1354,16 @@ def train():
             add_region_feature=model_args.add_region_feature,
             add_go_grid_sampler=model_args.add_go_grid_sampler,
         )
+
+        # Stage 2: unfreeze embed_tokens and lm_head so that the 361 new
+        # Go position tokens (<go_A1>...<go_S19>) can develop proper
+        # input embeddings and output probabilities during LoRA fine-tuning.
+        if model_args.unfreeze_embed_lm_head:
+            for p in model.get_input_embeddings().parameters():
+                p.requires_grad = True
+            for p in model.get_output_embeddings().parameters():
+                p.requires_grad = True
+            rank0_print("[Stage2] embed_tokens and lm_head UNFROZEN for Go token learning.")
 
     if training_args.bits in [4, 8]:
         from peft.tuners.lora import LoraLayer

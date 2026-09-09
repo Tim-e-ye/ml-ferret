@@ -479,6 +479,16 @@ class FERRETMetaModel:
 
             self.mm_projector.load_state_dict(get_w(mm_projector_weights, 'mm_projector'))
 
+            # Also load go_grid_sampler weights if present in the checkpoint
+            # (Stage 1 saves both mm_projector and go_grid_sampler into mm_projector.bin)
+            if hasattr(self, 'go_grid_sampler'):
+                sampler_w = {k.split('go_grid_sampler.')[1]: v
+                             for k, v in mm_projector_weights.items()
+                             if 'go_grid_sampler' in k}
+                if sampler_w:
+                    self.go_grid_sampler.load_state_dict(sampler_w)
+                    print("[Stage2] go_grid_sampler weights loaded from pretrain adapter.")
+
 
 class FERRETMetaForCausalLM(ABC):
 
