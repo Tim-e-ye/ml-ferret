@@ -23,20 +23,28 @@ from ferret.model.language_model.ferret_llama import FERRETLlamaForCausalLM, FER
 
 def parse_go_state(text):
     """
-    解析模型输出的字符串，形如: <go_A1>A1黑<go_B1>B1空...
+    解析模型输出的字符串，形如: <go_A1>A1黑<go_B1>B1空... 或带空格的输出
     返回 dict: {"A1": "黑", "B1": "空", ...}
     """
     state = {}
-    pattern = re.compile(r'<go_([A-S]\d{1,2})>\1([黑白空])')
+    # 标准匹配: <go_A1>A1黑 或 <go_A1> A1 黑
+    pattern = re.compile(r'<go_([A-S]\d{1,2})>\s*\1\s*([黑白空])')
     matches = pattern.findall(text)
     for pos, status in matches:
         state[pos] = status
     
-    # 宽松正则后备匹配 (如果模型只输出了点位或类别)
+    # 宽松后备 1: <go_A1>空 或 <go_A1> A1空
     if len(state) < 100:
-        pattern2 = re.compile(r'<go_([A-S]\d{1,2})>[A-S]?\d{0,2}([黑白空])')
+        pattern2 = re.compile(r'<go_([A-S]\d{1,2})>\s*(?:[A-S]?\d{0,2})?\s*([黑白空])')
         for pos, status in pattern2.findall(text):
             state[pos] = status
+
+    # 宽松后备 2: A1:黑 或 A1黑
+    if len(state) < 100:
+        pattern3 = re.compile(r'([A-S]\d{1,2})\s*[:：]?\s*([黑白空])')
+        for pos, status in pattern3.findall(text):
+            if pos not in state:
+                state[pos] = status
             
     return state
 
@@ -48,6 +56,7 @@ def evaluate():
 
     base_model_path = "/root/autodl-fs/models/vicuna-7b-v1.3"
     ckpt_path = "/root/autodl-fs/models/ferret_go_checkpoints/checkpoint-200/mm_projector.bin"
+    stage2_lora_dir = "/root/autodl-fs/models/ferret_go_stage2_lora"
     dataset_tar = "/root/autodl-fs/datasets/go_dataset.tar"
     shm_data_dir = "/dev/shm/go_dataset"
 
@@ -114,16 +123,39 @@ def evaluate():
     print(f"3. 注入微调好的围棋多模态权重: {ckpt_path}")
     weights = torch.load(ckpt_path, map_location="cpu")
     
-    # 加载 mm_projector 与 go_grid_sampler
+    # 加载 Stage 1 mm_projector 与 go_grid_sampler
     proj_weights = {k.replace("model.mm_projector.", ""): v for k, v in weights.items() if "model.mm_projector" in k}
     if proj_weights:
         model.get_model().mm_projector.load_state_dict(proj_weights)
-        print("   -> mm_projector 权重加载成功")
+        print("   -> mm_projector 视觉投影权重加载成功")
 
     sampler_weights = {k.replace("model.go_grid_sampler.projector.", "projector."): v for k, v in weights.items() if "go_grid_sampler" in k}
     if sampler_weights and hasattr(model.get_model(), "go_grid_sampler"):
         model.get_model().go_grid_sampler.load_state_dict(sampler_weights)
         print("   -> go_grid_sampler 围棋网格采样器权重加载成功")
+
+    # 如果存在 Stage 2 产物，加载 Stage 2 embed_tokens、lm_head 和 LoRA
+    non_lora_path = os.path.join(stage2_lora_dir, "non_lora_trainables.bin")
+    if os.path.exists(non_lora_path):
+        print(f"   -> 正在注入 Stage 2 解冻训练好的 Go Token 嵌入: {non_lora_path}")
+        non_lora_w = torch.load(non_lora_path, map_location="cpu")
+        embed_w = {k.split("embed_tokens.")[1]: v for k, v in non_lora_w.items() if "embed_tokens" in k}
+        if embed_w:
+            model.get_input_embeddings().load_state_dict(embed_w)
+            print("      ✓ embed_tokens (361 Go Token 词表输入嵌入) 加载成功")
+
+        lm_head_w = {k.split("lm_head.")[1]: v for k, v in non_lora_w.items() if "lm_head" in k}
+        if lm_head_w:
+            model.get_output_embeddings().load_state_dict(lm_head_w)
+            print("      ✓ lm_head (分类输出头) 加载成功")
+
+    if os.path.exists(os.path.join(stage2_lora_dir, "adapter_config.json")):
+        print(f"   -> 正在挂载 Stage 2 LoRA 适配器: {stage2_lora_dir}")
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, stage2_lora_dir)
+        print("      ✓ Stage 2 LoRA Attention 适配器挂载成功")
+        model = model.merge_and_unload()
+        print("      ✓ LoRA 适配器已融合至基座模型 (Zero-Overhead Native Inference)")
 
     model.get_model().mm_projector.to(device="cuda", dtype=torch.float16)
     if hasattr(model.get_model(), "go_grid_sampler"):
@@ -133,8 +165,13 @@ def evaluate():
     image_processor = vision_tower.image_processor
 
     print("\n4. 抽取验证集真实样本进行端到端推理测试...")
-    # 测试前 3 个样本
-    test_samples = val_data[:3]
+    test_samples = val_data[:5]
+
+    overall_correct = 0
+    overall_total = 0
+    overall_black_c, overall_black_t = 0, 0
+    overall_white_c, overall_white_t = 0, 0
+    overall_empty_c, overall_empty_t = 0, 0
 
     for idx, sample in enumerate(test_samples):
         img_rel = sample["image"]
@@ -170,11 +207,11 @@ def evaluate():
         # 生成预测
         with torch.inference_mode():
             output_ids = model.generate(
-                input_ids,
+                input_ids=input_ids,
                 images=img_tensor,
                 board_bboxes=[norm_bbox],
                 do_sample=False,
-                max_new_tokens=1024,
+                max_new_tokens=1800,
                 temperature=0.0
             )
 
@@ -226,8 +263,27 @@ def evaluate():
         print(f"   - 白子识别准确率       : {w_acc:.2f}% ({white_correct}/{white_total})")
         print(f"   - 空点识别准确率       : {e_acc:.2f}% ({empty_correct}/{empty_total})")
 
+        overall_correct += correct
+        overall_total += total_eval
+        overall_black_c += black_correct
+        overall_black_t += black_total
+        overall_white_c += white_correct
+        overall_white_t += white_total
+        overall_empty_c += empty_correct
+        overall_empty_t += empty_total
+
     print("\n" + "=" * 65)
-    print("🎉 围棋模型验证集效果评测完成！")
+    print("🏆 验证集综合评测总体汇总报告")
+    print("=" * 65)
+    o_acc = (overall_correct / overall_total * 100) if overall_total > 0 else 0
+    ob_acc = (overall_black_c / overall_black_t * 100) if overall_black_t > 0 else 0
+    ow_acc = (overall_white_c / overall_white_t * 100) if overall_white_t > 0 else 0
+    oe_acc = (overall_empty_c / overall_empty_t * 100) if overall_empty_t > 0 else 0
+    print(f"📌 测试样本总量 : {len(test_samples)} 盘真实棋局 (总点位 {overall_total})")
+    print(f"⭐ 全盘平均准确率 : {o_acc:.2f}% ({overall_correct}/{overall_total})")
+    print(f"⚫ 黑子平均识别率 : {ob_acc:.2f}% ({overall_black_c}/{overall_black_t})")
+    print(f"⚪ 白子平均识别率 : {ow_acc:.2f}% ({overall_white_c}/{overall_white_t})")
+    print(f"🟩 空点平均识别率 : {oe_acc:.2f}% ({overall_empty_c}/{overall_empty_t})")
     print("=" * 65)
 
 

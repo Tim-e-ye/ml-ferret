@@ -86,20 +86,24 @@ def api_request(token, endpoint, method="POST", data=None):
         "User-Agent": "AutoDL-Pro-Manager/1.0"
     }
 
-    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-            res_json = json.loads(raw)
-            if res_json.get("code") != "Success":
-                msg = res_json.get("msg") or res_json.get("message") or str(res_json)
-                raise RuntimeError(f"API 请求失败 [{endpoint}]: {msg}")
-            return res_json.get("data")
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {e.code} 错误: {body}")
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"网络连接错误: {e.reason}")
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+                res_json = json.loads(raw)
+                if res_json.get("code") != "Success":
+                    msg = res_json.get("msg") or res_json.get("message") or str(res_json)
+                    raise RuntimeError(f"API 请求失败 [{endpoint}]: {msg}")
+                return res_json.get("data")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"HTTP {e.code} 错误: {body}")
+        except urllib.error.URLError as e:
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            raise RuntimeError(f"网络连接错误: {e.reason}")
 
 def get_pro_instance_list(token):
     """获取所有 Pro 容器实例列表"""
@@ -143,8 +147,9 @@ def update_ssh_config(host_alias, ssh_host, ssh_port, identity_file="~/.ssh/id_r
         f"    IdentityFile {identity_file}\n",
         f"    StrictHostKeyChecking no\n",
         f"    UserKnownHostsFile /dev/null\n",
-        f"    ServerAliveInterval 60\n",
-        f"    ServerAliveCountMax 5\n"
+        f"    ServerAliveInterval 10\n",
+        f"    ServerAliveCountMax 3\n",
+        f"    TCPKeepAlive yes\n"
     ]
 
     i = 0
@@ -203,6 +208,20 @@ def resolve_target_uuid(instances, config):
 
     raise RuntimeError("当前账号下没有任何 AutoDL Pro 实例！请先在控制台创建一个 Pro 实例。")
 
+def resolve_domain_to_real_ip(domain):
+    """通过 AliDNS DoH 绕过本地代理/VPN TUN 的 Fake-IP 拦截获取真实公网 IP"""
+    try:
+        url = f"https://dns.alidns.com/resolve?name={domain}&type=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "AutoDL-Pro/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            for ans in data.get("Answer", []):
+                if ans.get("type") == 1 and ans.get("data"):
+                    return ans.get("data")
+    except Exception:
+        pass
+    return domain
+
 def cmd_start(config):
     """开机命令并注入 SSH 配置"""
     token = config["api_token"]
@@ -241,9 +260,11 @@ def cmd_start(config):
     if not ssh_host or not ssh_port:
         raise RuntimeError(f"未能获取到 SSH 连接节点与端口，快照返回: {snapshot}")
 
+    real_ip = resolve_domain_to_real_ip(ssh_host)
+
     update_ssh_config(
         host_alias=config.get("ssh_host_alias", "autodl-pro"),
-        ssh_host=ssh_host,
+        ssh_host=real_ip,
         ssh_port=ssh_port,
         identity_file=config.get("identity_file", "~/.ssh/id_rsa")
     )
@@ -321,9 +342,15 @@ def cmd_log(config, follow=False, lines=25):
     flag = "-f" if follow else f"-n {lines}"
     print(f"📡 正在拉取远程训练日志 ({alias}:{log_path})... (按 Ctrl+C 可退出)\n" + "-" * 60)
     try:
-        subprocess.run(["ssh", alias, f"if [ -f {log_path} ]; then tail {flag} {log_path}; else echo '尚未检测到 train.log 日志文件，请确认训练是否已启动。'; fi"])
+        subprocess.run(["ssh", "-n", alias, f"if [ -f {log_path} ]; then tail {flag} {log_path}; else echo '尚未检测到 train.log 日志文件，请确认训练是否已启动。'; fi"])
     except KeyboardInterrupt:
         print("\n[INFO] 已退出日志查看。后台训练继续在远程运行中。")
+
+def cmd_exec(config, cmd_str):
+    """在远程实例执行指令并输出结果"""
+    alias = config.get("ssh_host_alias", "autodl-pro")
+    import subprocess
+    subprocess.run(["ssh", "-n", alias, cmd_str])
 
 def main():
     parser = argparse.ArgumentParser(description="AutoDL Pro 无状态实例与本地 IDE 自动化连接管理器")
@@ -337,6 +364,9 @@ def main():
     log_parser = subparsers.add_parser("log", aliases=["loss"], help="实时查看远程训练日志与 Loss 变化")
     log_parser.add_argument("-f", "--follow", action="store_true", help="持续流式跟踪最新日志")
     log_parser.add_argument("-n", "--lines", type=int, default=25, help="显示的行数 (默认: 25)")
+
+    exec_parser = subparsers.add_parser("exec", aliases=["run"], help="在远程实例上执行命令")
+    exec_parser.add_argument("remote_command", help="要执行的 Shell 命令")
 
     args = parser.parse_args()
     if not args.command:
@@ -357,6 +387,8 @@ def main():
             cmd_update_ssh(config)
         elif cmd in ["log", "loss"]:
             cmd_log(config, follow=getattr(args, "follow", False), lines=getattr(args, "lines", 25))
+        elif cmd in ["exec", "run"]:
+            cmd_exec(config, args.remote_command)
     except Exception as e:
         print(f"\n[ERROR] 操作失败: {e}", file=sys.stderr)
         sys.exit(1)

@@ -560,6 +560,27 @@ class FERRETMetaForCausalLM(ABC):
         region_geo_sampler = region_flag and getattr(self.config, 'region_geo_sampler', False)
 
         vision_tower = self.get_vision_tower()
+        go_grid_sampler = getattr(self.config, 'go_grid_sampler', False)
+        go_token_ids = getattr(self.config, 'go_position_token_ids', None)
+
+        # Autoregressive generation step (input_ids.shape[1] == 1 with KV Cache)
+        if past_key_values is not None and input_ids is not None and input_ids.shape[1] == 1:
+            if attention_mask is not None and vision_tower is not None and images is not None:
+                attention_mask = torch.ones((attention_mask.shape[0], past_key_values[-1][-1].shape[-2] + 1), dtype=attention_mask.dtype, device=attention_mask.device)
+
+            # Check if this single input token is a Go position token (<go_A1>...<go_S19>)
+            token_id = input_ids[0, 0].item()
+            if go_grid_sampler and go_token_ids is not None and token_id in go_token_ids:
+                pos_idx = go_token_ids.index(token_id)
+                cached_feats = getattr(self, '_cached_go_position_features', None)
+                if cached_feats is not None and len(cached_feats) > 0 and cached_feats[0] is not None:
+                    # cached_feats[0] is of shape (361, hidden_size)
+                    # Extract the visual feature for this specific intersection: (1, 1, hidden_size)
+                    go_feat_emb = cached_feats[0][pos_idx].unsqueeze(0).unsqueeze(0).to(dtype=self.dtype, device=input_ids.device)
+                    return None, attention_mask, past_key_values, go_feat_emb, labels
+
+            return input_ids, attention_mask, past_key_values, None, labels
+
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
                 attention_mask = torch.ones((attention_mask.shape[0], past_key_values[-1][-1].shape[-2] + 1), dtype=attention_mask.dtype, device=attention_mask.device)
@@ -595,6 +616,7 @@ class FERRETMetaForCausalLM(ABC):
                 original_dtype=raw_image_features.dtype,
                 return_dtype=image_features.dtype
             )
+            self._cached_go_position_features = go_position_features
         else:
             go_position_features = None
 

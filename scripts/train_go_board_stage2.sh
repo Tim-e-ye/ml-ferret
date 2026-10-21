@@ -54,8 +54,7 @@ fi
 #   --lora_enable True: 启用 LoRA 微调 LLM 注意力层
 #   --unfreeze_embed_lm_head True: 解冻 embed_tokens 和 lm_head
 #   --pretrain_mm_mlp_adapter: 加载 Stage 1 训练好的 projector + sampler 权重
-python -m torch.distributed.run --nproc_per_node=1 --master_port=25001 \
-    ferret/train/train.py \
+python ferret/train/train.py \
     --model_name_or_path "$MODEL_NAME_OR_PATH" \
     --version "ferret_go_v1" \
     --data_path "$DATA_PATH" \
@@ -92,10 +91,22 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port=25001 \
     --lazy_preprocess True \
     --report_to "tensorboard"
 
-echo "================================================================"
-echo "🎉 Ferret 围棋 Stage 2 LoRA 微调训练完成！"
-echo "正在执行磁盘同步并在 5 秒后安全关机..."
-echo "================================================================"
-sync
-sleep 5
-/usr/bin/shutdown
+TRAIN_EXIT_CODE=$?
+
+if [ $TRAIN_EXIT_CODE -eq 0 ]; then
+    echo "================================================================"
+    echo "🎉 Ferret 围棋 Stage 2 LoRA 微调训练圆满完成！"
+    echo "正在执行磁盘同步并在 10 秒后安全关机停止扣费..."
+    echo "================================================================"
+    sync
+    sleep 10
+    /usr/bin/shutdown
+else
+    echo "================================================================"
+    echo "❌ 训练异常退出 (Exit Code: $TRAIN_EXIT_CODE)！"
+    echo "正在同步日志，保留 10 分钟供排查，随后自动关机以防持续扣费..."
+    echo "================================================================"
+    sync
+    sleep 600
+    /usr/bin/shutdown
+fi
